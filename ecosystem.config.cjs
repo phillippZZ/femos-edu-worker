@@ -5,6 +5,8 @@ module.exports = {
       cwd: __dirname,
       script: "src/server.mjs",
       interpreter: "/opt/homebrew/bin/node",
+      autorestart: true,
+      stop_exit_codes: [0],
       env: {
         NODE_ENV: "production",
         ARDUINO_CLI_PATH: "/opt/homebrew/bin/arduino-cli",

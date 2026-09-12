@@ -11,7 +11,7 @@ import { buildEspOtaUploadArgs, buildUsbUploadArgs } from "./upload-command.mjs"
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.2.0";
+const VERSION = "2.2.1";
 const BUNDLED_ARDUINO_CLI = join(dirname(process.execPath), platform() === "win32" ? "arduino-cli.exe" : "arduino-cli");
 const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || (existsSync(BUNDLED_ARDUINO_CLI) ? BUNDLED_ARDUINO_CLI : "arduino-cli");
 const SERVICE_COMPILER = process.env.FEMOS_SERVICE_COMPILER === "true";
@@ -619,12 +619,33 @@ const server = createServer(async (request, response) => {
         sendJson(response, 200, { accepted: true, action: body.action, settings: workerSettings });
         return;
       }
-      if (body.action === "restart") {
-        sendJson(response, 202, { accepted: true, action: "restart" });
-        setTimeout(() => process.exit(75), 250).unref();
+      if (body.action === "restart" || body.action === "shutdown") {
+        if (activeUpload || activeCompiles > 0) {
+          sendJson(response, 409, { error: "Wait for active uploads and compilations to finish before controlling the process." });
+          return;
+        }
+        stopActiveMonitor(`Worker ${body.action} requested from Worker Console.`);
+        sendJson(response, 202, { accepted: true, action: body.action });
+        setTimeout(() => {
+          if (body.action === "restart" && SERVICE_COMPILER) {
+            process.exit(75);
+            return;
+          }
+          server.close(() => {
+            if (body.action === "restart") {
+              const replacement = spawn(process.execPath, process.argv.slice(1), {
+                detached: true,
+                env: process.env,
+                stdio: "inherit",
+              });
+              replacement.unref();
+            }
+            process.exit(0);
+          });
+        }, 250).unref();
         return;
       }
-      sendJson(response, 400, { error: "Choose pause, resume, or restart." });
+      sendJson(response, 400, { error: "Choose pause, resume, restart, or shutdown." });
       return;
     }
     if (workerSettings.paused) {

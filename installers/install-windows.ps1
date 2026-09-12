@@ -5,7 +5,7 @@ $Asset = "femos-worker-windows-x64.zip"
 $InstallRoot = Join-Path $env:LOCALAPPDATA "FEMOS Worker"
 $AppDir = Join-Path $InstallRoot "app"
 $DataDir = Join-Path $InstallRoot "data"
-$TaskName = "FEMOS Worker"
+$LegacyTaskName = "FEMOS Worker"
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("femos-worker-" + [guid]::NewGuid())
 
 New-Item -ItemType Directory -Force -Path $TempDir, $InstallRoot, $DataDir | Out-Null
@@ -25,7 +25,8 @@ try {
   if (-not (Test-Path (Join-Path $Extracted "bin\node.exe"))) { throw "The release does not contain Node.js." }
   if (-not (Test-Path (Join-Path $Extracted "bin\arduino-cli.exe"))) { throw "The release does not contain Arduino CLI." }
 
-  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  Stop-ScheduledTask -TaskName $LegacyTaskName -ErrorAction SilentlyContinue
+  Unregister-ScheduledTask -TaskName $LegacyTaskName -Confirm:$false -ErrorAction SilentlyContinue
   Start-Sleep -Milliseconds 500
   $Previous = Join-Path $InstallRoot "app.previous"
   if (Test-Path $Previous) { Remove-Item $Previous -Recurse -Force }
@@ -33,14 +34,7 @@ try {
   Move-Item $Extracted $AppDir
   $ExpectedVersion = (Get-Content (Join-Path $AppDir "VERSION") -Raw).Trim()
 
-  $Node = Join-Path $AppDir "bin\node.exe"
-  $Server = Join-Path $AppDir "app\src\server.mjs"
-  $Action = New-ScheduledTaskAction -Execute $Node -Argument ('"' + $Server + '"')
-  $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-  $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
-  $TaskSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-  Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $TaskSettings -Force | Out-Null
-  Start-ScheduledTask -TaskName $TaskName
+  & (Join-Path $AppDir "bin\femos-worker-control.ps1") -Action start
 
   for ($Attempt = 0; $Attempt -lt 10; $Attempt++) {
     Start-Sleep -Seconds 1

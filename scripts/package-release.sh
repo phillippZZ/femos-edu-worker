@@ -62,6 +62,7 @@ if [ "$TARGET" = "windows-x64" ]; then
   cp "$WORK/node"/*/node.exe "$WORK/femos-worker/bin/node.exe"
   cp "$WORK/node"/*/LICENSE "$WORK/femos-worker/licenses/node-LICENSE"
   cp "$WORK/arduino/arduino-cli.exe" "$WORK/femos-worker/bin/arduino-cli.exe"
+  cp "$ROOT/installers/control-windows.ps1" "$WORK/femos-worker/bin/femos-worker-control.ps1"
   (cd "$WORK" && zip -qr "$DIST/$ARCHIVE" femos-worker)
 else
   mkdir -p "$WORK/node" "$WORK/arduino"
@@ -71,7 +72,7 @@ else
   cp "$WORK/node"/*/LICENSE "$WORK/femos-worker/licenses/node-LICENSE"
   cp "$WORK/arduino/arduino-cli" "$WORK/femos-worker/bin/arduino-cli"
   cp "$ROOT/scripts/run-worker.sh" "$WORK/femos-worker/bin/femos-worker"
-  if [ "$TARGET" = "macos-arm64" ] || [ "$TARGET" = "macos-x64" ]; then
+  if [ "$TARGET" = "macos-arm64" ] || [ "$TARGET" = "macos-x64" ] || [ "$TARGET" = "linux-x64" ]; then
     cp "$ROOT/scripts/control-macos.sh" "$WORK/femos-worker/bin/femos-worker-control"
   fi
   chmod 755 "$WORK/femos-worker/bin/node" "$WORK/femos-worker/bin/arduino-cli" "$WORK/femos-worker/bin/femos-worker"

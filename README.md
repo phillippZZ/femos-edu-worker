@@ -17,8 +17,9 @@ sh install-macos.sh
 ```
 
 The installer verifies the release checksum, installs under
-`~/Library/Application Support/FEMOS Worker`, registers a per-user LaunchAgent,
-starts the worker, and checks its health. Re-run the same command to update.
+`~/Library/Application Support/FEMOS Worker`, removes older automatic-start
+registrations, starts the worker once, and checks its health. It does not run at
+computer login. Re-run the same command to update.
 
 ## Install on Windows
 
@@ -29,16 +30,17 @@ irm https://raw.githubusercontent.com/phillippZZ/femos-edu-worker/main/installer
 powershell -ExecutionPolicy Bypass -File .\install-femos-worker.ps1
 ```
 
-The Windows installer uses `%LOCALAPPDATA%\FEMOS Worker`, registers a per-user
-scheduled task, starts the worker, and verifies its health.
+The Windows installer uses `%LOCALAPPDATA%\FEMOS Worker`, removes older
+automatic-start tasks, starts the worker once, and verifies its health. It does
+not run at computer login.
 
 After installation, open [Worker Console](https://femos.ai/worker-console) to
 choose **This computer** or **FEMOS workers**, configure capacity, initialize
 ESP32 Wi-Fi, or host a classroom upload bridge.
 
-Worker Console can pause/resume work and request a supervised restart. A fully
-stopped worker cannot receive browser commands, so use the installed control
-script for true process lifecycle operations:
+Worker Console can pause/resume work, restart the process, or fully
+shut down the service. A stopped worker cannot receive browser commands, so use
+the installed control script to start it again or for terminal lifecycle operations:
 
 ```sh
 "$HOME/Library/Application Support/FEMOS Worker/app/bin/femos-worker-control" status
@@ -47,8 +49,9 @@ script for true process lifecycle operations:
 "$HOME/Library/Application Support/FEMOS Worker/app/bin/femos-worker-control" restart
 ```
 
-On Windows, download `installers/control-windows.ps1` and run it with
-`-Action start`, `stop`, `restart`, or `status`.
+On Windows, run the installed
+`%LOCALAPPDATA%\FEMOS Worker\app\bin\femos-worker-control.ps1` with `-Action
+start`, `stop`, `restart`, or `status`.
 
 ## Development
 
