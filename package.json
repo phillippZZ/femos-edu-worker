@@ -1,0 +1,14 @@
+{
+  "name": "femos-edu-worker",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/server.mjs && node --check src/upload-command.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
