@@ -36,6 +36,20 @@ After installation, open [Worker Console](https://femos.ai/worker-console) to
 choose **This computer** or **FEMOS workers**, configure capacity, initialize
 ESP32 Wi-Fi, or host a classroom upload bridge.
 
+Worker Console can pause/resume work and request a supervised restart. A fully
+stopped worker cannot receive browser commands, so use the installed control
+script for true process lifecycle operations:
+
+```sh
+"$HOME/Library/Application Support/FEMOS Worker/app/bin/femos-worker-control" status
+"$HOME/Library/Application Support/FEMOS Worker/app/bin/femos-worker-control" stop
+"$HOME/Library/Application Support/FEMOS Worker/app/bin/femos-worker-control" start
+"$HOME/Library/Application Support/FEMOS Worker/app/bin/femos-worker-control" restart
+```
+
+On Windows, download `installers/control-windows.ps1` and run it with
+`-Action start`, `stop`, `restart`, or `status`.
+
 ## Development
 
 Requirements: Node.js 20+ and Arduino CLI on `PATH`.

@@ -38,7 +38,8 @@ try {
   $Action = New-ScheduledTaskAction -Execute $Node -Argument ('"' + $Server + '"')
   $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
   $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
-  Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Force | Out-Null
+  $TaskSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+  Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $TaskSettings -Force | Out-Null
   Start-ScheduledTask -TaskName $TaskName
 
   for ($Attempt = 0; $Attempt -lt 10; $Attempt++) {

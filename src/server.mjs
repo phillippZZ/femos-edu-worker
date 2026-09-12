@@ -11,7 +11,7 @@ import { buildEspOtaUploadArgs, buildUsbUploadArgs } from "./upload-command.mjs"
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.1.1";
+const VERSION = "2.2.0";
 const BUNDLED_ARDUINO_CLI = join(dirname(process.execPath), platform() === "win32" ? "arduino-cli.exe" : "arduino-cli");
 const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || (existsSync(BUNDLED_ARDUINO_CLI) ? BUNDLED_ARDUINO_CLI : "arduino-cli");
 const SERVICE_COMPILER = process.env.FEMOS_SERVICE_COMPILER === "true";
@@ -54,6 +54,7 @@ let workerSettings = {
   useForMyBuilds: true,
   useForLan: true,
   contributePublic: SERVICE_COMPILER,
+  paused: false,
 };
 
 function safeWorkerSettings(candidate) {
@@ -73,6 +74,7 @@ function safeWorkerSettings(candidate) {
     useForLan: candidate.useForLan !== false,
     // Only a FEMOS-managed process may advertise global compilation.
     contributePublic: SERVICE_COMPILER,
+    paused: candidate.paused === true,
   };
 }
 
@@ -606,6 +608,27 @@ const server = createServer(async (request, response) => {
       COMPILE_JOBS = settings.jobsPerCompile;
       await saveWorkerSettings(settings);
       sendJson(response, 200, { settings: workerSettings });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/v1/control") {
+      const body = await readJsonBody(request);
+      if (body.action === "pause" || body.action === "resume") {
+        workerSettings = { ...workerSettings, paused: body.action === "pause" };
+        await saveWorkerSettings(workerSettings);
+        if (workerSettings.paused) stopActiveMonitor("Worker paused from Worker Console.");
+        sendJson(response, 200, { accepted: true, action: body.action, settings: workerSettings });
+        return;
+      }
+      if (body.action === "restart") {
+        sendJson(response, 202, { accepted: true, action: "restart" });
+        setTimeout(() => process.exit(75), 250).unref();
+        return;
+      }
+      sendJson(response, 400, { error: "Choose pause, resume, or restart." });
+      return;
+    }
+    if (workerSettings.paused) {
+      sendJson(response, 503, { error: "This worker is paused. Resume it from Worker Console." });
       return;
     }
     if (request.method === "POST" && request.url === "/v1/compile") {

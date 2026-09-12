@@ -9,6 +9,7 @@ JSON except upload and monitor streams, which use newline-delimited JSON.
 - `GET /v1/health` — version, capabilities, activity, and settings
 - `GET /v1/settings` — local capacity and scope settings
 - `POST /v1/settings` — replace validated local settings
+- `POST /v1/control` — persist pause/resume or request a supervised restart
 - `POST /v1/compile` — compile a validated FEMOS build plan
 - `GET /v1/boards` — discover connected supported boards
 - `POST /v1/upload` — USB or ESP32 OTA firmware delivery

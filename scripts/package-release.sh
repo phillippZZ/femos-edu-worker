@@ -71,7 +71,11 @@ else
   cp "$WORK/node"/*/LICENSE "$WORK/femos-worker/licenses/node-LICENSE"
   cp "$WORK/arduino/arduino-cli" "$WORK/femos-worker/bin/arduino-cli"
   cp "$ROOT/scripts/run-worker.sh" "$WORK/femos-worker/bin/femos-worker"
+  if [ "$TARGET" = "macos-arm64" ] || [ "$TARGET" = "macos-x64" ]; then
+    cp "$ROOT/scripts/control-macos.sh" "$WORK/femos-worker/bin/femos-worker-control"
+  fi
   chmod 755 "$WORK/femos-worker/bin/node" "$WORK/femos-worker/bin/arduino-cli" "$WORK/femos-worker/bin/femos-worker"
+  if [ -f "$WORK/femos-worker/bin/femos-worker-control" ]; then chmod 755 "$WORK/femos-worker/bin/femos-worker-control"; fi
   tar -czf "$DIST/$ARCHIVE" -C "$WORK" femos-worker
 fi
 
