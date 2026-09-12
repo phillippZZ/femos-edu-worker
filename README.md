@@ -46,6 +46,16 @@ npm run check
 npm start
 ```
 
+The FEMOS production Mac may run this checkout with PM2:
+
+```sh
+pm2 start ecosystem.config.cjs
+pm2 save
+```
+
+That service profile preserves the existing KESU cache/settings paths and is
+the only profile allowed to advertise `public-world` compilation.
+
 Successful firmware is cached for seven days. Settings and caches live in the
 operating system's per-user application-data directory unless overridden with
 `FEMOS_WORKER_DATA_DIR`, `FEMOS_FIRMWARE_CACHE_DIR`, or
