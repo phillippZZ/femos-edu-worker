@@ -11,14 +11,16 @@ export function buildUsbUploadArgs({ fqbn, inputDir, port, sketchDir }) {
   ];
 }
 
-export function buildEspOtaUploadArgs({ fqbn, inputDir, host, password, sketchDir }) {
+export function buildEspOtaArgs({ scriptPath, host, password, firmwarePath }) {
   return [
-    "upload",
-    "--port", host,
-    "--protocol", "network",
-    "--fqbn", fqbn,
-    "--input-dir", inputDir,
-    "--upload-field", `password=${password}`,
-    sketchDir,
+    ...(scriptPath ? [scriptPath] : []),
+    "-r",
+    "-i",
+    host,
+    "-p",
+    "3232",
+    `--auth=${password}`,
+    "-f",
+    firmwarePath,
   ];
 }

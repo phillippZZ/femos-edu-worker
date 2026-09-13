@@ -4,14 +4,14 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir, platform, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { buildEspOtaUploadArgs, buildUsbUploadArgs } from "./upload-command.mjs";
+import { dirname, isAbsolute, join } from "node:path";
+import { buildEspOtaArgs, buildUsbUploadArgs } from "./upload-command.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.2.1";
+const VERSION = "2.2.2";
 const BUNDLED_ARDUINO_CLI = join(dirname(process.execPath), platform() === "win32" ? "arduino-cli.exe" : "arduino-cli");
 const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || (existsSync(BUNDLED_ARDUINO_CLI) ? BUNDLED_ARDUINO_CLI : "arduino-cli");
 const SERVICE_COMPILER = process.env.FEMOS_SERVICE_COMPILER === "true";
@@ -195,6 +195,34 @@ function runExecutable(executable, args, { signal, timeout, onOutput } = {}) {
 
 function runCommand(args, options) {
   return runExecutable(ARDUINO_CLI, args, options);
+}
+
+async function resolveEspOtaUploader(signal) {
+  const dataDir = (await runCommand(["config", "get", "directories.data"], {
+    signal,
+    timeout: 10_000,
+  })).trim();
+  if (!dataDir || !isAbsolute(dataDir))
+    throw new Error("Arduino CLI did not report a valid data directory.");
+
+  const platformRoot = join(dataDir, "packages", "esp32", "hardware", "esp32");
+  const versions = (await readdir(platformRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
+  for (const version of versions) {
+    const scriptPath = join(platformRoot, version, "tools", platform() === "win32" ? "espota.exe" : "espota.py");
+    try {
+      await access(scriptPath);
+      return {
+        executable: platform() === "win32" ? scriptPath : (process.env.PYTHON_PATH || "python3"),
+        scriptPath: platform() === "win32" ? null : scriptPath,
+      };
+    } catch {
+      // Continue to another installed ESP32 core version.
+    }
+  }
+  throw new Error("The installed ESP32 Arduino core does not include its OTA uploader.");
 }
 
 function coreInstalled(coreList, coreId) {
@@ -852,12 +880,14 @@ const server = createServer(async (request, response) => {
       sendEvent(response, { type: "progress", progress: 70, message: `Uploading to ${boardName}…` });
       if (uploadMode === "ota") {
         await ensureCore(target, controller.signal);
-        await runCommand(buildEspOtaUploadArgs({
-          fqbn: target.fqbn,
-          inputDir: buildDir,
+        const firmware = artifactFiles.find((file) => file.name.endsWith(".ino.bin"));
+        if (!firmware) throw new Error("The ESP32 firmware bundle does not contain its application image.");
+        const otaUploader = await resolveEspOtaUploader(controller.signal);
+        await runExecutable(otaUploader.executable, buildEspOtaArgs({
+          scriptPath: otaUploader.scriptPath,
           host: uploadPort,
           password: otaPassword,
-          sketchDir,
+          firmwarePath: join(buildDir, firmware.name),
         }), { signal: controller.signal, timeout: 120_000 });
       } else {
         await ensureCore(target, controller.signal);
