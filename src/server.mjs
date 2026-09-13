@@ -11,7 +11,7 @@ import { buildEspOtaArgs, buildUsbUploadArgs } from "./upload-command.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.2.2";
+const VERSION = "2.2.3";
 const BUNDLED_ARDUINO_CLI = join(dirname(process.execPath), platform() === "win32" ? "arduino-cli.exe" : "arduino-cli");
 const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || (existsSync(BUNDLED_ARDUINO_CLI) ? BUNDLED_ARDUINO_CLI : "arduino-cli");
 const SERVICE_COMPILER = process.env.FEMOS_SERVICE_COMPILER === "true";
@@ -883,12 +883,29 @@ const server = createServer(async (request, response) => {
         const firmware = artifactFiles.find((file) => file.name.endsWith(".ino.bin"));
         if (!firmware) throw new Error("The ESP32 firmware bundle does not contain its application image.");
         const otaUploader = await resolveEspOtaUploader(controller.signal);
+        let otaProgress = -1;
+        let otaOutput = "";
         await runExecutable(otaUploader.executable, buildEspOtaArgs({
           scriptPath: otaUploader.scriptPath,
           host: uploadPort,
           password: otaPassword,
           firmwarePath: join(buildDir, firmware.name),
-        }), { signal: controller.signal, timeout: 120_000 });
+        }), {
+          signal: controller.signal,
+          timeout: 120_000,
+          onOutput(output) {
+            otaOutput = `${otaOutput}${output}`.slice(-2_000);
+            const matches = [...otaOutput.matchAll(/Uploading:[^\r\n]*?\s(\d{1,3})%/g)];
+            const percentage = Number(matches.at(-1)?.[1] ?? -1);
+            if (percentage < 0 || percentage > 100 || percentage === otaProgress) return;
+            otaProgress = percentage;
+            sendEvent(response, {
+              type: "progress",
+              progress: Math.round(72 + percentage * 0.26),
+              message: `Uploading over Wi-Fi… ${percentage}%`,
+            });
+          },
+        });
       } else {
         await ensureCore(target, controller.signal);
         await runCommand(

@@ -18,6 +18,7 @@ describe("buildUploadArgs", () => {
       "-p",
       "3232",
       "--auth=safe-test-password",
+      "--progress",
       "-f",
       "/tmp/build/FemosSketch.ino.bin",
     ]);
