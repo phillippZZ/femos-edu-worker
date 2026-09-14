@@ -11,7 +11,7 @@ import { buildEspOtaArgs, buildUsbUploadArgs } from "./upload-command.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.2.3";
+const VERSION = "2.2.4";
 const BUNDLED_ARDUINO_CLI = join(dirname(process.execPath), platform() === "win32" ? "arduino-cli.exe" : "arduino-cli");
 const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || (existsSync(BUNDLED_ARDUINO_CLI) ? BUNDLED_ARDUINO_CLI : "arduino-cli");
 const SERVICE_COMPILER = process.env.FEMOS_SERVICE_COMPILER === "true";
@@ -557,7 +557,7 @@ async function compileFirmware(plan, signal) {
       }
       const artifactNames = plan.targetId === "esp32-arduino"
         ? names.filter((name) => name.endsWith(".ino.bin") || name.endsWith(".ino.bootloader.bin") || name.endsWith(".ino.partitions.bin") || name === "boot_app0.bin" || name === "flash_args")
-        : names.filter((name) => name.endsWith(".elf-zsk.bin"));
+        : names.filter((name) => name.endsWith(".ino.elf") || name.endsWith(".ino.elf-zsk.bin"));
       if (artifactNames.length === 0) throw new Error(`Arduino CLI did not produce firmware for ${plan.target.label}.`);
       return {
         compiled: true,
@@ -908,10 +908,17 @@ const server = createServer(async (request, response) => {
         });
       } else {
         await ensureCore(target, controller.signal);
+        const unoQInputFile = target.id === "arduino-uno-q"
+          ? artifactFiles.find((file) => file.name.endsWith(".ino.elf"))
+          : null;
+        if (target.id === "arduino-uno-q" && !unoQInputFile) {
+          throw new Error("The Arduino UNO Q firmware bundle does not contain its ELF upload artifact.");
+        }
         await runCommand(
           buildUsbUploadArgs({
             fqbn: target.fqbn,
             inputDir: buildDir,
+            inputFile: unoQInputFile ? join(buildDir, unoQInputFile.name) : null,
             port: uploadPort,
             sketchDir,
           }),

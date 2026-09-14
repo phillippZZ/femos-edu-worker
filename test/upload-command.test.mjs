@@ -36,6 +36,19 @@ describe("buildUploadArgs", () => {
     assert.ok(!args.includes("--upload-field"));
   });
 
+  it("uploads UNO Q from its explicit ELF artifact", () => {
+    const args = buildUsbUploadArgs({
+      fqbn: "arduino:zephyr:unoq",
+      inputDir: "/tmp/build",
+      inputFile: "/tmp/build/FemosSketch.ino.elf",
+      port: "/dev/cu.usbmodem101",
+      sketchDir: "/tmp/FemosUpload",
+    });
+
+    assert.deepEqual(args.slice(5, 7), ["--input-file", "/tmp/build/FemosSketch.ino.elf"]);
+    assert.ok(!args.includes("--input-dir"));
+  });
+
   it("runs the Windows ESP32 OTA executable without a script argument", () => {
     const args = buildEspOtaArgs({
       scriptPath: null,

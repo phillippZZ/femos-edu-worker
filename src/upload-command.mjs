@@ -1,12 +1,11 @@
-export function buildUsbUploadArgs({ fqbn, inputDir, port, sketchDir }) {
+export function buildUsbUploadArgs({ fqbn, inputDir, inputFile, port, sketchDir }) {
   return [
     "upload",
     "--port",
     port,
     "--fqbn",
     fqbn,
-    "--input-dir",
-    inputDir,
+    ...(inputFile ? ["--input-file", inputFile] : ["--input-dir", inputDir]),
     sketchDir,
   ];
 }
