@@ -11,7 +11,7 @@ import { buildEspOtaArgs, buildUsbUploadArgs } from "./upload-command.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.2.4";
+const VERSION = "2.2.5";
 const BUNDLED_ARDUINO_CLI = join(dirname(process.execPath), platform() === "win32" ? "arduino-cli.exe" : "arduino-cli");
 const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || (existsSync(BUNDLED_ARDUINO_CLI) ? BUNDLED_ARDUINO_CLI : "arduino-cli");
 const SERVICE_COMPILER = process.env.FEMOS_SERVICE_COMPILER === "true";
@@ -447,9 +447,12 @@ function safeCompilePlan(body) {
 
 function validCachedCompile(value, plan) {
   if (!value || value.compiled !== true || value.boardFqbn !== plan.target.fqbn || !Array.isArray(value.requiredLibraries)) return false;
-  return plan.targetId === "arduino-uno-r3"
-    ? typeof value.firmwareHex === "string"
-    : Boolean(value.firmwareArtifact && value.firmwareArtifact.targetId === plan.targetId && Array.isArray(value.firmwareArtifact.files));
+  if (plan.targetId === "arduino-uno-r3") return typeof value.firmwareHex === "string";
+  const files = value.firmwareArtifact?.files;
+  if (value.firmwareArtifact?.targetId !== plan.targetId || !Array.isArray(files)) return false;
+  if (plan.targetId !== "arduino-uno-q") return true;
+  return files.some((file) => file?.name?.endsWith(".ino.elf"))
+    && files.some((file) => file?.name?.endsWith(".ino.elf-zsk.bin"));
 }
 
 async function readPersistentCompile(key, plan) {
@@ -501,7 +504,7 @@ async function withCompileSlot(operation) {
 async function compileFirmware(plan, signal) {
   await ensureCore(plan.target, signal);
   const key = createHash("sha256").update(JSON.stringify({
-    version: 2,
+    version: 3,
     cli: ARDUINO_CLI,
     targetId: plan.targetId,
     boardFqbn: plan.target.fqbn,
