@@ -630,6 +630,56 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, { settings: workerSettings });
       return;
     }
+    if (request.method === "POST" && request.url === "/v1/enroll") {
+      // Enrollment is browser-initiated but completed locally. Never return the
+      // durable Worker credential to the browser or accept an arbitrary server URL.
+      const origin = request.headers.origin;
+      if (!origin || !ALLOWED_ORIGINS.has(origin)) {
+        sendJson(response, 403, { error: "Open the Worker Console on an allowed FEMOS origin." });
+        return;
+      }
+      const { token } = await readJsonBody(request);
+      if (typeof token !== "string" || !/^femos_enroll_[A-Za-z0-9_-]{43}$/.test(token)) {
+        sendJson(response, 400, { error: "Provide a valid one-time enrollment token." });
+        return;
+      }
+      if (existsSync(REMOTE_IDENTITY_PATH)) {
+        sendJson(response, 409, { error: "This computer already has a Worker identity. Revoke it before enrolling another." });
+        return;
+      }
+      const endpoint = new URL(origin);
+      if (endpoint.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(endpoint.hostname)) {
+        sendJson(response, 403, { error: "Enrollment requires FEMOS HTTPS." });
+        return;
+      }
+      const enrollment = await fetch(new URL("/api/v1/worker/enroll", endpoint), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, version: VERSION }), signal: AbortSignal.timeout(15_000),
+      });
+      const result = await enrollment.json().catch(() => ({}));
+      if (!enrollment.ok || !result.workerId || !result.credential) {
+        sendJson(response, enrollment.status || 502, { error: result.error ?? "FEMOS enrollment failed." });
+        return;
+      }
+      await mkdir(dirname(REMOTE_IDENTITY_PATH), { recursive: true, mode: 0o700 });
+      const temporary = `${REMOTE_IDENTITY_PATH}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, JSON.stringify({ workerId: result.workerId,
+          credential: result.credential, serverUrl: endpoint.origin }), { mode: 0o600, flag: "wx" });
+        if (existsSync(REMOTE_IDENTITY_PATH)) throw new Error("Worker identity already exists.");
+        await rename(temporary, REMOTE_IDENTITY_PATH);
+      } catch (error) {
+        await rm(temporary, { force: true });
+        throw error;
+      }
+      remoteExecution = await startRemoteExecutionClient({ baseUrl: endpoint.origin,
+        identityPath: REMOTE_IDENTITY_PATH, version: VERSION, safePlan: safeCompilePlan,
+        compile: compileFirmware, isPaused: () => workerSettings.paused,
+        onEvent: (message) => console.log(`[remote-execution] ${message}`),
+      });
+      sendJson(response, 200, { workerId: result.workerId, enrolled: true });
+      return;
+    }
     if (request.method === "POST" && request.url === "/v1/settings") {
       const settings = safeWorkerSettings(await readJsonBody(request));
       if (!settings) {
@@ -972,7 +1022,7 @@ server.listen(PORT, HOST, () => {
   console.log(`FEMOS Local Uploader ${VERSION} listening on http://${HOST}:${PORT}`);
 });
 
-const remoteExecution = await startRemoteExecutionClient({
+let remoteExecution = await startRemoteExecutionClient({
   baseUrl: process.env.FEMOS_EXECUTION_SERVER_URL,
   identityPath: REMOTE_IDENTITY_PATH,
   version: VERSION,
