@@ -38,7 +38,7 @@ After installation, open [Worker Console](https://femos.ai/worker-console) to
 choose **This computer** or **FEMOS workers**, configure capacity, initialize
 ESP32 Wi-Fi, or host a classroom upload bridge.
 
-### Enroll for durable FEMOS compilation
+### Enroll for durable FEMOS operations
 
 In Worker Console, an authenticated owner can create a named, one-time Worker
 enrollment token. On the intended computer, pass that token on standard input
@@ -53,9 +53,16 @@ Worker Console; a revoked credential cannot claim or report another build.
 The bundled `app/rotate-worker.mjs` script rotates the credential without
 showing it, then the Worker must be restarted within the 10-minute overlap.
 
-This enrollment currently enables only `arduino.compile@1`. Upload and Serial
-Monitor remain local-only capabilities. The Worker never accepts a remote shell
-command or a caller-supplied executable path.
+Enrollment advertises reviewed `arduino.compile@1` and `arduino.upload@1`
+capabilities. Managed upload is owner-requested through FEMOS and is limited to
+an explicitly enrolled Device with a verified USB VID/PID/serial fingerprint,
+a fresh Worker attachment, and an exact compiled Firmware Artifact. The Worker
+rediscovers the board before using its transient local port. A failed or lost
+physical upload is never retried automatically; FEMOS requires inspection and
+explicit reconciliation. Boards without a stable USB identity still use the
+existing local/browser upload path. ESP32 OTA and Serial Monitor remain local
+operations. The Worker never accepts a remote shell command or a
+caller-supplied executable or firmware path.
 
 Worker Console can pause/resume work, restart the process, or fully
 shut down the service. A stopped worker cannot receive browser commands, so use

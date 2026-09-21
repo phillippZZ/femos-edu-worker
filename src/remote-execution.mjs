@@ -28,16 +28,33 @@ export function digestPlan(plan) {
   return createHash("sha256").update(JSON.stringify({ operation: "arduino.compile", version: 1, plan })).digest("hex");
 }
 
-/** Outbound-only durable compile. Existing loopback upload/monitor APIs stay separate. */
-export async function startRemoteExecutionClient({ baseUrl, identityPath, version, safePlan, compile, isPaused, onEvent = () => {} }) {
+export function digestUpload(snapshot) {
+  return createHash("sha256").update(JSON.stringify({ operation: "arduino.upload", version: 1, snapshot })).digest("hex");
+}
+
+function safeUploadSnapshot(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+      !/^[a-zA-Z0-9_-]{8,80}$/.test(raw.deviceId ?? "") ||
+      !/^[a-zA-Z0-9_-]{8,80}$/.test(raw.artifactId ?? "") ||
+      !/^[a-f0-9]{64}$/.test(raw.artifactDigest ?? "") ||
+      !/^[a-f0-9]{64}$/.test(raw.identityFingerprint ?? "") ||
+      !TARGETS.includes(raw.targetId) || raw.mode !== "usb") return null;
+  return { deviceId: raw.deviceId, artifactId: raw.artifactId,
+    artifactDigest: raw.artifactDigest, identityFingerprint: raw.identityFingerprint,
+    targetId: raw.targetId, mode: "usb" };
+}
+
+/** Outbound-only reviewed operations; the local hardware API remains loopback-only. */
+export async function startRemoteExecutionClient({ baseUrl, identityPath, version, safePlan, compile,
+  discover, upload, isPaused, onEvent = () => {} }) {
   let identity;
   try {
     const metadata = await stat(identityPath);
     if (platform() !== "win32" && (metadata.mode & 0o077) !== 0) throw new Error("Worker identity file permissions are too broad.");
     identity = JSON.parse(await readFile(identityPath, "utf8"));
   } catch (error) {
-    onEvent(error?.code === "ENOENT" ? "No enrolled identity; remote compile polling is disabled."
-      : "Worker identity could not be loaded securely; remote compile polling is disabled.");
+    onEvent(error?.code === "ENOENT" ? "No enrolled identity; remote Execution polling is disabled."
+      : "Worker identity could not be loaded securely; remote Execution polling is disabled.");
     return { enabled: false, stop() {} };
   }
   // Enrollment is the explicit opt-in. An ordinary installation without an
@@ -50,9 +67,89 @@ export async function startRemoteExecutionClient({ baseUrl, identityPath, versio
   let stopped = false;
   let activeController = null;
   const auth = (path, body, timeout) => workerRequest(base, identity.credential, path, body, timeout);
-  const heartbeat = () => auth("/api/v1/worker/heartbeat", { version, capability: {
-    capabilityKey: CAPABILITY, adapterVersion: ADAPTER_VERSION, supportedTargets: TARGETS, healthy: !isPaused(),
-  } });
+  const heartbeat = async () => {
+    let observations = [];
+    if (upload && discover) {
+      try { observations = await discover(); }
+      catch (error) { onEvent(`Device discovery unavailable: ${error instanceof Error ? error.message : "unknown"}`); }
+    }
+    const compilation = { capabilityKey: CAPABILITY, adapterVersion: ADAPTER_VERSION,
+      supportedTargets: TARGETS, healthy: !isPaused() };
+    return auth("/api/v1/worker/heartbeat", { version,
+      capability: upload ? [compilation, { capabilityKey: "arduino.upload@1", adapterVersion: "1",
+        supportedTargets: TARGETS, healthy: !isPaused() }] : compilation,
+      observations });
+  };
+
+  async function fetchFirmware(executionId, attempt, leaseToken, expectedDigest) {
+    const url = `${base}/api/v1/worker/executions/${encodeURIComponent(executionId)}/firmware?attempt=${attempt}`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${identity.credential}`,
+      "X-FEMOS-Lease-Token": leaseToken }, signal: AbortSignal.timeout(20_000), cache: "no-store" });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(body.error ?? "Firmware download failed."), { status: response.status });
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > 20_000_000 ||
+        createHash("sha256").update(bytes).digest("hex") !== expectedDigest ||
+        response.headers.get("X-FEMOS-Artifact-Digest") !== expectedDigest) {
+      throw new Error("Firmware Artifact failed size or digest verification.");
+    }
+    return JSON.parse(bytes.toString("utf8"));
+  }
+
+  async function runUploadClaim(claim) {
+    const { executionId, attempt, leaseToken, inputDigest } = claim;
+    const snapshot = safeUploadSnapshot(claim.upload);
+    if (!snapshot || digestUpload(snapshot) !== inputDigest || !upload) {
+      await auth(`/api/v1/worker/executions/${executionId}/failure`, { attempt, leaseToken,
+        diagnostics: "Claimed upload input failed Worker validation.", effectStarted: false });
+      return;
+    }
+    const controller = new AbortController();
+    activeController = controller;
+    let leaseValid = true;
+    let effectStarted = false;
+    let lastRenewal = Date.now();
+    const renew = async (progress) => {
+      try {
+        const state = await auth(`/api/v1/worker/executions/${executionId}/renew`, { attempt, leaseToken, progress });
+        lastRenewal = Date.now();
+        if (state.cancellationRequested) controller.abort(new Error("Upload cancellation requested; physical outcome may need inspection."));
+      } catch (error) {
+        if (error?.status === 409 || Date.now() - lastRenewal > 35_000) {
+          leaseValid = false;
+          controller.abort(new Error("Upload lease lost; do not retry physical action."));
+        }
+      }
+    };
+    await renew(0);
+    if (!leaseValid) return;
+    const timer = setInterval(() => { void renew(40); }, 10_000);
+    try {
+      const firmware = await fetchFirmware(executionId, attempt, leaseToken, snapshot.artifactDigest);
+      if (controller.signal.aborted) throw controller.signal.reason;
+      await upload(snapshot, firmware, controller.signal, () => { effectStarted = true; });
+      if (!leaseValid || controller.signal.aborted) return;
+      await renew(95);
+      if (!leaseValid || controller.signal.aborted) return;
+      await auth(`/api/v1/worker/executions/${executionId}/result`, { attempt, leaseToken,
+        evidence: "Arduino CLI confirmed the selected firmware upload." });
+      onEvent(`Device upload ${executionId} confirmed.`);
+    } catch (error) {
+      if (leaseValid) {
+        try {
+          await auth(`/api/v1/worker/executions/${executionId}/failure`, { attempt, leaseToken,
+            diagnostics: error instanceof Error ? error.message.slice(-8_000) : "Upload failed.", effectStarted });
+        } catch (reportError) {
+          onEvent(`Upload ${executionId} requires reconciliation: ${reportError instanceof Error ? reportError.message : "report unavailable"}`);
+        }
+      }
+    } finally {
+      clearInterval(timer);
+      activeController = null;
+    }
+  }
 
   async function runClaim(claim) {
     const { executionId, attempt, leaseToken, inputDigest } = claim;
@@ -110,10 +207,11 @@ export async function startRemoteExecutionClient({ baseUrl, identityPath, versio
         await heartbeat();
         if (!isPaused()) {
           const { claim } = await auth("/api/v1/worker/claim", {});
-          if (claim) await runClaim(claim);
+          if (claim?.operation === "arduino.upload") await runUploadClaim(claim);
+          else if (claim) await runClaim(claim);
         }
       } catch (error) {
-        onEvent(`Remote compile connection: ${error instanceof Error ? error.message : "unavailable"}`);
+        onEvent(`Remote Execution connection: ${error instanceof Error ? error.message : "unavailable"}`);
       }
       if (!stopped) await sleep(2_000);
     }

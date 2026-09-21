@@ -9,10 +9,11 @@ import { homedir, platform, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { buildEspOtaArgs, buildUsbUploadArgs } from "./upload-command.mjs";
 import { startRemoteExecutionClient } from "./remote-execution.mjs";
+import { parseDeviceObservations, publicDeviceObservations, resolveAttachedBoard } from "./device-discovery.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.3.0";
+const VERSION = "2.4.0";
 const BUNDLED_ARDUINO_CLI = join(dirname(process.execPath), platform() === "win32" ? "arduino-cli.exe" : "arduino-cli");
 const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || (existsSync(BUNDLED_ARDUINO_CLI) ? BUNDLED_ARDUINO_CLI : "arduino-cli");
 const SERVICE_COMPILER = process.env.FEMOS_SERVICE_COMPILER === "true";
@@ -376,6 +377,13 @@ async function listBoards(signal) {
       return recognized;
     },
   );
+}
+
+async function discoverPhysicalDevices(signal) {
+  const output = await runCommand(["board", "list", "--format", "json"], {
+    signal, timeout: 15_000,
+  });
+  return parseDeviceObservations(JSON.parse(output));
 }
 
 function safeOtaPort(value) {
@@ -914,6 +922,16 @@ const server = createServer(async (request, response) => {
       }
       uploadPort = board.address;
       boardName = board.boardName;
+      if (body.expectedIdentityFingerprint) {
+        const attached = resolveAttachedBoard(await discoverPhysicalDevices(controller.signal), {
+          targetId: body.targetId,
+          fingerprint: body.expectedIdentityFingerprint,
+        });
+        if (!attached || attached.address !== uploadPort) {
+          sendJson(response, 409, { error: "The selected board's verified USB identity changed. Refresh Device discovery before uploading." });
+          return;
+        }
+      }
     }
 
     activeUpload = true;
@@ -963,10 +981,10 @@ const server = createServer(async (request, response) => {
         });
       } else {
         await ensureCore(target, controller.signal);
-        const unoQInputFile = target.id === "arduino-uno-q"
+        const unoQInputFile = body.targetId === "arduino-uno-q"
           ? artifactFiles.find((file) => file.name.endsWith(".ino.elf"))
           : null;
-        if (target.id === "arduino-uno-q" && !unoQInputFile) {
+        if (body.targetId === "arduino-uno-q" && !unoQInputFile) {
           throw new Error("The Arduino UNO Q firmware bundle does not contain its ELF upload artifact.");
         }
         await runCommand(
@@ -1022,12 +1040,60 @@ server.listen(PORT, HOST, () => {
   console.log(`FEMOS Local Uploader ${VERSION} listening on http://${HOST}:${PORT}`);
 });
 
+async function uploadManagedDevice(snapshot, compiled, signal, markPhysicalStart) {
+  const target = TARGETS.get(snapshot.targetId);
+  if (!target) throw new Error("Unsupported managed Device target.");
+  const board = resolveAttachedBoard(await discoverPhysicalDevices(signal), {
+    targetId: snapshot.targetId,
+    fingerprint: snapshot.identityFingerprint,
+  });
+  if (!board) throw new Error("Verified Device is not connected to this Worker.");
+  const firmwareArtifact = compiled.firmwareArtifact ?? (typeof compiled.firmwareHex === "string"
+    ? { targetId: snapshot.targetId, boardFqbn: target.fqbn,
+      files: [{ name: "FemosSketch.ino.hex", dataBase64: Buffer.from(compiled.firmwareHex, "utf8").toString("base64") }] }
+    : null);
+  if (!safeFirmwareArtifact(firmwareArtifact, snapshot.targetId, target.fqbn)) {
+    throw new Error("Compiled firmware bundle is not valid for this Device.");
+  }
+  // The local endpoint performs a second identity check immediately before its
+  // hardware effect. Any interruption after dispatch is conservatively uncertain.
+  markPhysicalStart();
+  const response = await fetch(`http://${HOST}:${PORT}/v1/upload`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, signal,
+    body: JSON.stringify({ targetId: snapshot.targetId, firmwareArtifact,
+      mode: "usb", port: board.address, expectedIdentityFingerprint: snapshot.identityFingerprint }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error ?? `Local Device upload returned HTTP ${response.status}.`);
+  }
+  if (!response.body) throw new Error("Local Device upload returned no status stream.");
+  let buffer = "";
+  let completed = false;
+  for await (const chunk of response.body) {
+    buffer += Buffer.from(chunk).toString("utf8");
+    if (buffer.length > 80_000) throw new Error("Device upload status stream exceeded its limit.");
+    let newline;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line) continue;
+      const event = JSON.parse(line);
+      if (event.type === "error") throw new Error(String(event.message ?? "Device upload failed.").slice(0, 2_000));
+      if (event.type === "complete") completed = true;
+    }
+  }
+  if (!completed) throw new Error("Device upload ended without a completion confirmation.");
+}
+
 let remoteExecution = await startRemoteExecutionClient({
   baseUrl: process.env.FEMOS_EXECUTION_SERVER_URL,
   identityPath: REMOTE_IDENTITY_PATH,
   version: VERSION,
   safePlan: safeCompilePlan,
   compile: compileFirmware,
+  discover: async () => publicDeviceObservations(await discoverPhysicalDevices()),
+  upload: uploadManagedDevice,
   isPaused: () => workerSettings.paused,
   onEvent: (message) => console.log(`[remote-execution] ${message}`),
 });
