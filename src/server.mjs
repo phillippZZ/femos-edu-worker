@@ -8,10 +8,11 @@ import { access, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, unlink, wr
 import { homedir, platform, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { buildEspOtaArgs, buildUsbUploadArgs } from "./upload-command.mjs";
+import { startRemoteExecutionClient } from "./remote-execution.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.2.5";
+const VERSION = "2.3.0";
 const BUNDLED_ARDUINO_CLI = join(dirname(process.execPath), platform() === "win32" ? "arduino-cli.exe" : "arduino-cli");
 const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || (existsSync(BUNDLED_ARDUINO_CLI) ? BUNDLED_ARDUINO_CLI : "arduino-cli");
 const SERVICE_COMPILER = process.env.FEMOS_SERVICE_COMPILER === "true";
@@ -45,6 +46,7 @@ const DEFAULT_DATA_DIR = platform() === "win32"
 const WORKER_DATA_DIR = (process.env.FEMOS_WORKER_DATA_DIR || DEFAULT_DATA_DIR).replace(/[\\/]+$/, "");
 const FIRMWARE_CACHE_DIR = (process.env.FEMOS_FIRMWARE_CACHE_DIR || join(WORKER_DATA_DIR, "firmware-cache")).replace(/[\\/]+$/, "");
 const WORKER_SETTINGS_PATH = process.env.FEMOS_WORKER_SETTINGS_PATH || join(WORKER_DATA_DIR, "worker-settings.json");
+const REMOTE_IDENTITY_PATH = process.env.FEMOS_WORKER_IDENTITY_PATH || join(WORKER_DATA_DIR, "worker-identity.json");
 const FIRMWARE_CACHE_TTL = 7 * 24 * 60 * 60 * 1_000;
 const FIRMWARE_CACHE_LIMIT = 64;
 let workerSettings = {
@@ -970,8 +972,20 @@ server.listen(PORT, HOST, () => {
   console.log(`FEMOS Local Uploader ${VERSION} listening on http://${HOST}:${PORT}`);
 });
 
+const remoteExecution = await startRemoteExecutionClient({
+  baseUrl: process.env.FEMOS_EXECUTION_SERVER_URL,
+  identityPath: REMOTE_IDENTITY_PATH,
+  version: VERSION,
+  safePlan: safeCompilePlan,
+  compile: compileFirmware,
+  isPaused: () => workerSettings.paused,
+  onEvent: (message) => console.log(`[remote-execution] ${message}`),
+});
+if (remoteExecution.enabled) console.log(`[remote-execution] Enrolled Worker ${remoteExecution.workerId} polling outbound.`);
+
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
+    remoteExecution.stop();
     stopActiveMonitor("Local uploader stopped.");
     server.close(() => process.exit(0));
   });

@@ -22,3 +22,21 @@ The authoritative browser client is maintained in FEMOS at
 `src/features/arduino-blocks/local-uploader.ts`. Protocol changes must remain
 backward-compatible within the current major version or coordinate a client
 release before the worker release.
+
+## Outbound durable compile protocol v1
+
+After explicit one-time enrollment, the Worker reads its protected identity file
+and initiates outbound HTTPS requests to the enrolled FEMOS server. Its bearer
+credential is distinct from the owner's login/PAT and is never sent to the
+browser, Composition, or CodeFile. The Worker posts heartbeat/capability,
+claims at most one eligible `arduino.compile@1` Execution, renews its lease,
+then reports either a bounded failure or the actual compiled firmware result.
+FEMOS persists the private result Artifact. This path reuses `compileFirmware`
+from the loopback adapter; it does not change physical upload/monitor endpoints.
+
+The server endpoints are `POST /api/v1/worker/heartbeat`, `/claim`, `/rotate`,
+and `/executions/{id}/renew|result|failure`. A claim includes attempt number,
+lease token, validated plan and input digest. The Worker verifies the digest
+before invoking Arduino CLI. All result/failure/renew requests carry the
+attempt and lease token. FEMOS rejects stale or revoked attempts. A missing
+identity file means no remote polling; no inbound Internet port is opened.

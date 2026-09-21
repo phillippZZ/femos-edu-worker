@@ -33,6 +33,8 @@ esac
 
 mkdir -p "$DIST" "$WORK/femos-worker/bin" "$WORK/femos-worker/app" "$WORK/femos-worker/licenses"
 cp -R "$ROOT/src" "$WORK/femos-worker/app/src"
+cp "$ROOT/scripts/enroll-worker.mjs" "$WORK/femos-worker/app/enroll-worker.mjs"
+cp "$ROOT/scripts/rotate-worker.mjs" "$WORK/femos-worker/app/rotate-worker.mjs"
 cp "$ROOT/package.json" "$WORK/femos-worker/app/package.json"
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$WORK/femos-worker/THIRD_PARTY_NOTICES.md"
 node -p 'require(process.argv[1]).version' "$ROOT/package.json" > "$WORK/femos-worker/VERSION"

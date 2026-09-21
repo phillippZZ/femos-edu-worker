@@ -38,6 +38,25 @@ After installation, open [Worker Console](https://femos.ai/worker-console) to
 choose **This computer** or **FEMOS workers**, configure capacity, initialize
 ESP32 Wi-Fi, or host a classroom upload bridge.
 
+### Enroll for durable FEMOS compilation
+
+In Worker Console, an authenticated owner can create a named, one-time Worker
+enrollment token. On the intended computer, pass that token on standard input
+to the bundled `app/enroll-worker.mjs` script with `https://femos.ai` as its
+argument. Use the bundled Node runtime (`bin/node` or `bin/node.exe`). Do not
+put the token in a command argument or shell history. Restart the Worker after
+enrollment. Enrollment stores a protected, per-computer identity file containing
+its independent credential and the explicitly selected FEMOS server URL.
+Without enrollment, the ordinary local upload/compile service does not make
+outbound Execution polling requests. The owner can revoke that Worker from
+Worker Console; a revoked credential cannot claim or report another build.
+The bundled `app/rotate-worker.mjs` script rotates the credential without
+showing it, then the Worker must be restarted within the 10-minute overlap.
+
+This enrollment currently enables only `arduino.compile@1`. Upload and Serial
+Monitor remain local-only capabilities. The Worker never accepts a remote shell
+command or a caller-supplied executable path.
+
 Worker Console can pause/resume work, restart the process, or fully
 shut down the service. A stopped worker cannot receive browser commands, so use
 the installed control script to start it again or for terminal lifecycle operations:
