@@ -32,6 +32,10 @@ export function digestUpload(snapshot) {
   return createHash("sha256").update(JSON.stringify({ operation: "arduino.upload", version: 1, snapshot })).digest("hex");
 }
 
+export function digestManufacturing(operation, snapshot) {
+  return createHash("sha256").update(JSON.stringify({ operation, version: 1, snapshot })).digest("hex");
+}
+
 function safeUploadSnapshot(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
       !/^[a-zA-Z0-9_-]{8,80}$/.test(raw.deviceId ?? "") ||
@@ -46,7 +50,7 @@ function safeUploadSnapshot(raw) {
 
 /** Outbound-only reviewed operations; the local hardware API remains loopback-only. */
 export async function startRemoteExecutionClient({ baseUrl, identityPath, version, safePlan, compile,
-  discover, upload, isPaused, onEvent = () => {} }) {
+  discover, upload, slice, sliceAvailable, simulate, simulatedPrinter = false, isPaused, onEvent = () => {} }) {
   let identity;
   try {
     const metadata = await stat(identityPath);
@@ -73,13 +77,106 @@ export async function startRemoteExecutionClient({ baseUrl, identityPath, versio
       try { observations = await discover(); }
       catch (error) { onEvent(`Device discovery unavailable: ${error instanceof Error ? error.message : "unknown"}`); }
     }
+    if (simulate && simulatedPrinter) {
+      observations = observations.slice(0, 19);
+      const fingerprint = createHash("sha256").update(`simulated-printer:${identity.workerId}`).digest("hex");
+      observations.push({ targetId: "simulated-printer-v1", identityKind: "SIMULATED",
+        observationKey: createHash("sha256").update(`observation:${fingerprint}`).digest("hex"),
+        fingerprint, label: "FEMOS Simulated 3D Printer" });
+    }
     const compilation = { capabilityKey: CAPABILITY, adapterVersion: ADAPTER_VERSION,
       supportedTargets: TARGETS, healthy: !isPaused() };
+    const capabilities = [compilation];
+    if (upload) capabilities.push({ capabilityKey: "arduino.upload@1", adapterVersion: "1",
+      supportedTargets: TARGETS, healthy: !isPaused() });
+    if (slice && await sliceAvailable()) capabilities.push({ capabilityKey: "manufacturing.slice@1", adapterVersion: "1",
+      supportedTargets: ["generic-pla-0.4"], healthy: !isPaused() });
+    if (simulate && simulatedPrinter) capabilities.push({ capabilityKey: "printer.simulate@1", adapterVersion: "1",
+      supportedTargets: ["simulated-printer-v1"], healthy: !isPaused() });
     return auth("/api/v1/worker/heartbeat", { version,
-      capability: upload ? [compilation, { capabilityKey: "arduino.upload@1", adapterVersion: "1",
-        supportedTargets: TARGETS, healthy: !isPaused() }] : compilation,
+      capability: capabilities,
       observations });
   };
+
+  async function fetchManufacturingInput(executionId, attempt, leaseToken, expectedDigest) {
+    const url = `${base}/api/v1/worker/executions/${encodeURIComponent(executionId)}/input?attempt=${attempt}`;
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${identity.credential}`,
+      "X-FEMOS-Lease-Token": leaseToken }, signal: AbortSignal.timeout(30_000), cache: "no-store" });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error ?? "Manufacturing input download failed.");
+    }
+    const length = Number(response.headers.get("content-length"));
+    if (length > 12_000_000) throw new Error("Manufacturing input exceeds Worker limit.");
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > 12_000_000 ||
+        createHash("sha256").update(bytes).digest("hex") !== expectedDigest ||
+        response.headers.get("x-femos-artifact-digest") !== expectedDigest) {
+      throw new Error("Manufacturing input Artifact failed digest verification.");
+    }
+    return bytes;
+  }
+
+  async function runManufacturingClaim(claim) {
+    const { executionId, attempt, leaseToken, inputDigest, operation } = claim;
+    const snapshot = operation === "manufacturing.slice" ? claim.slice : claim.print;
+    const valid = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) &&
+      /^[a-f0-9]{64}$/.test(snapshot.artifactDigest ?? "") &&
+      digestManufacturing(operation, snapshot) === inputDigest &&
+      (operation === "manufacturing.slice"
+        ? snapshot.profileId === "generic-pla-0.4" && snapshot.materialId === "PLA" && !!slice
+        : snapshot.targetId === "simulated-printer-v1" && snapshot.profileId === "generic-pla-0.4" && !!simulate && simulatedPrinter);
+    if (!valid) {
+      await auth(`/api/v1/worker/executions/${executionId}/failure`, { attempt, leaseToken,
+        diagnostics: "Unreviewed or invalid manufacturing claim.", effectStarted: false });
+      return;
+    }
+    const controller = new AbortController();
+    activeController = controller;
+    let leaseValid = true;
+    let effectStarted = false;
+    let lastRenewal = Date.now();
+    const renew = async (progress) => {
+      try {
+        const state = await auth(`/api/v1/worker/executions/${executionId}/renew`, { attempt, leaseToken, progress });
+        lastRenewal = Date.now();
+        if (state.cancellationRequested) controller.abort(new Error("Manufacturing cancellation requested."));
+      } catch (error) {
+        if (error?.status === 409 || Date.now() - lastRenewal > 35_000) {
+          leaseValid = false;
+          controller.abort(new Error("Manufacturing lease lost; do not repeat physical action."));
+        }
+      }
+    };
+    await renew(0);
+    if (!leaseValid) return;
+    const timer = setInterval(() => { void renew(40); }, 10_000);
+    try {
+      const bytes = await fetchManufacturingInput(executionId, attempt, leaseToken, snapshot.artifactDigest);
+      if (controller.signal.aborted) throw controller.signal.reason;
+      const result = operation === "manufacturing.slice"
+        ? await slice(bytes, controller.signal)
+        : await simulate(bytes, snapshot, controller.signal, () => { effectStarted = true; });
+      if (!leaseValid || controller.signal.aborted) return;
+      await renew(95);
+      if (!leaseValid || controller.signal.aborted) return;
+      await auth(`/api/v1/worker/executions/${executionId}/result`, { attempt, leaseToken,
+        ...(operation === "manufacturing.slice" ? { result } : { evidence: result }) }, 60_000);
+      onEvent(`${operation} ${executionId} confirmed.`);
+    } catch (error) {
+      if (leaseValid) {
+        try {
+          await auth(`/api/v1/worker/executions/${executionId}/failure`, { attempt, leaseToken,
+            diagnostics: error instanceof Error ? error.message.slice(-8_000) : "Manufacturing failed.", effectStarted });
+        } catch (reportError) {
+          onEvent(`${operation} ${executionId} requires inspection: ${reportError instanceof Error ? reportError.message : "report unavailable"}`);
+        }
+      }
+    } finally {
+      clearInterval(timer);
+      activeController = null;
+    }
+  }
 
   async function fetchFirmware(executionId, attempt, leaseToken, expectedDigest) {
     const url = `${base}/api/v1/worker/executions/${encodeURIComponent(executionId)}/firmware?attempt=${attempt}`;
@@ -208,6 +305,7 @@ export async function startRemoteExecutionClient({ baseUrl, identityPath, versio
         if (!isPaused()) {
           const { claim } = await auth("/api/v1/worker/claim", {});
           if (claim?.operation === "arduino.upload") await runUploadClaim(claim);
+          else if (claim?.operation === "manufacturing.slice" || claim?.operation === "printer.simulate") await runManufacturingClaim(claim);
           else if (claim) await runClaim(claim);
         }
       } catch (error) {

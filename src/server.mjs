@@ -10,10 +10,17 @@ import { dirname, isAbsolute, join } from "node:path";
 import { buildEspOtaArgs, buildUsbUploadArgs } from "./upload-command.mjs";
 import { startRemoteExecutionClient } from "./remote-execution.mjs";
 import { parseDeviceObservations, publicDeviceObservations, resolveAttachedBoard } from "./device-discovery.mjs";
+import { slicerConfiguration, sliceStl, simulatePrint } from "./manufacturing.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.4.0";
+const VERSION = "2.5.0";
+const SIMULATED_PRINTER = process.env.FEMOS_SIMULATED_PRINTER === "true";
+const sliceWithConfiguredSlicer = async (bytes, signal) => {
+  const config = await slicerConfiguration();
+  if (!config) throw new Error("A reviewed PrusaSlicer executable and profile are not configured.");
+  return sliceStl(bytes, config, signal);
+};
 const BUNDLED_ARDUINO_CLI = join(dirname(process.execPath), platform() === "win32" ? "arduino-cli.exe" : "arduino-cli");
 const ARDUINO_CLI = process.env.ARDUINO_CLI_PATH || (existsSync(BUNDLED_ARDUINO_CLI) ? BUNDLED_ARDUINO_CLI : "arduino-cli");
 const SERVICE_COMPILER = process.env.FEMOS_SERVICE_COMPILER === "true";
@@ -682,7 +689,12 @@ const server = createServer(async (request, response) => {
       }
       remoteExecution = await startRemoteExecutionClient({ baseUrl: endpoint.origin,
         identityPath: REMOTE_IDENTITY_PATH, version: VERSION, safePlan: safeCompilePlan,
-        compile: compileFirmware, isPaused: () => workerSettings.paused,
+        compile: compileFirmware,
+        discover: async () => publicDeviceObservations(await discoverPhysicalDevices()),
+        upload: uploadManagedDevice, slice: sliceWithConfiguredSlicer,
+        sliceAvailable: async () => Boolean(await slicerConfiguration()),
+        simulate: simulatePrint, simulatedPrinter: SIMULATED_PRINTER,
+        isPaused: () => workerSettings.paused,
         onEvent: (message) => console.log(`[remote-execution] ${message}`),
       });
       sendJson(response, 200, { workerId: result.workerId, enrolled: true });
@@ -1094,6 +1106,10 @@ let remoteExecution = await startRemoteExecutionClient({
   compile: compileFirmware,
   discover: async () => publicDeviceObservations(await discoverPhysicalDevices()),
   upload: uploadManagedDevice,
+  slice: sliceWithConfiguredSlicer,
+  sliceAvailable: async () => Boolean(await slicerConfiguration()),
+  simulate: simulatePrint,
+  simulatedPrinter: SIMULATED_PRINTER,
   isPaused: () => workerSettings.paused,
   onEvent: (message) => console.log(`[remote-execution] ${message}`),
 });

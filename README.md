@@ -64,6 +64,24 @@ existing local/browser upload path. ESP32 OTA and Serial Monitor remain local
 operations. The Worker never accepts a remote shell command or a
 caller-supplied executable or firmware path.
 
+### Optional 3D-printing lab adapter
+
+The reviewed `manufacturing.slice@1` adapter is advertised only when
+`FEMOS_PRUSASLICER_PATH` and `FEMOS_PRUSASLICER_PROFILE_PATH` are absolute,
+readable operator-configured paths. The packaged
+`profiles/generic-pla-0.4.ini` is a digital-pipeline proof profile for
+PrusaSlicer 2.9.6, **not a certified physical-printer profile**. The Worker
+passes a fixed argument list and a private temporary STL to the slicer; no
+client supplies CLI flags, paths, or commands. Model and G-code Artifacts are
+transferred by scoped Execution lease, size bound, and SHA-256 digest.
+
+Set `FEMOS_SIMULATED_PRINTER=true` only on a trusted test Worker to advertise
+`printer.simulate@1` and a simulated Device observation. An owner must enroll
+that Device and explicitly approve each PrintRequest. This adapter never
+connects to a real printer. Its status is a software simulation, not evidence
+that an object was physically printed. Do not route its G-code to physical
+hardware without a separately reviewed and certified adapter.
+
 Worker Console can pause/resume work, restart the process, or fully
 shut down the service. A stopped worker cannot receive browser commands, so use
 the installed control script to start it again or for terminal lifecycle operations:

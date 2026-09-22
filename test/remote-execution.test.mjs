@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { digestPlan, digestUpload, startRemoteExecutionClient } from "../src/remote-execution.mjs";
+import { digestManufacturing, digestPlan, digestUpload, startRemoteExecutionClient } from "../src/remote-execution.mjs";
+import { sliceStl } from "../src/manufacturing.mjs";
+import { fileURLToPath } from "node:url";
 
 test("outbound enrolled Worker claims a typed compile and reports its result", async () => {
   const dir = await mkdtemp(join(tmpdir(), "femos-remote-worker-test-"));
@@ -45,6 +47,92 @@ test("outbound enrolled Worker claims a typed compile and reports its result", a
   } finally {
     client?.stop();
     globalThis.fetch = originalFetch;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("outbound Worker executes a real reviewed STL slice and returns printable bytes", async (t) => {
+  const slicer = process.env.FEMOS_TEST_PRUSASLICER_PATH || "/Applications/PrusaSlicer.app/Contents/MacOS/PrusaSlicer";
+  try { await access(slicer); } catch { t.skip("PrusaSlicer not installed."); return; }
+  const dir = await mkdtemp(join(tmpdir(), "femos-remote-slice-test-"));
+  const identityPath = join(dir, "identity.json");
+  const model = await readFile(fileURLToPath(new URL("./fixtures/tetrahedron.stl", import.meta.url)));
+  const profile = fileURLToPath(new URL("../profiles/generic-pla-0.4.ini", import.meta.url));
+  const artifactDigest = createHash("sha256").update(model).digest("hex");
+  const slice = { artifactId: "artifact_12345678", artifactDigest, profileId: "generic-pla-0.4", materialId: "PLA" };
+  await writeFile(identityPath, JSON.stringify({ workerId: "worker-slice", credential: `femos_worker_${"s".repeat(43)}`,
+    serverUrl: "https://femos.example" }), { mode: 0o600 });
+  const originalFetch = globalThis.fetch;
+  let claims = 0;
+  let completed;
+  const reported = new Promise((resolve) => { completed = resolve; });
+  globalThis.fetch = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith("/input")) return { ok: true, arrayBuffer: async () => model,
+      headers: new Headers({ "X-FEMOS-Artifact-Digest": artifactDigest, "Content-Length": String(model.length) }) };
+    const body = JSON.parse(init.body);
+    if (path.endsWith("/claim")) return { ok: true, json: async () => ({ claim: claims++ === 0
+      ? { operation: "manufacturing.slice", executionId: "execution-slice", attempt: 1,
+        leaseToken: `femos_lease_${"l".repeat(43)}`, inputDigest: digestManufacturing("manufacturing.slice", slice), slice } : null }) };
+    if (path.endsWith("/result")) { completed(body.result); }
+    return { ok: true, json: async () => ({ cancellationRequested: false }) };
+  };
+  let client;
+  try {
+    client = await startRemoteExecutionClient({ identityPath, version: "2.5.0",
+      safePlan: (value) => value, compile: async () => { throw new Error("Unexpected Arduino compile"); },
+      sliceAvailable: async () => true,
+      slice: async (bytes, signal) => sliceStl(bytes, { executable: slicer, profile }, signal),
+      isPaused: () => false });
+    const result = await Promise.race([reported, new Promise((_, reject) => setTimeout(() => reject(new Error("Slice not reported.")), 5_000))]);
+    const output = Buffer.from(result.gcodeBase64, "base64");
+    assert.ok(output.length > 1_000);
+    assert.equal(result.digest, createHash("sha256").update(output).digest("hex"));
+  } finally {
+    client?.stop(); globalThis.fetch = originalFetch;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("simulated physical dispatch reports uncertainty after effect start without a second claim", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "femos-remote-print-test-"));
+  const identityPath = join(dir, "identity.json");
+  await writeFile(identityPath, JSON.stringify({ workerId: "worker-print", credential: `femos_worker_${"p".repeat(43)}`,
+    serverUrl: "https://femos.example" }), { mode: 0o600 });
+  const gcode = Buffer.from("; printable\nG28\nG1 X10 Y10\n");
+  const artifactDigest = createHash("sha256").update(gcode).digest("hex");
+  const print = { printRequestId: "printrequest123", deviceId: "device_12345678",
+    artifactId: "artifact_12345678", artifactDigest, profileId: "generic-pla-0.4",
+    identityFingerprint: "a".repeat(64), targetId: "simulated-printer-v1" };
+  let claims = 0;
+  let physicalStarts = 0;
+  let failure;
+  const reported = new Promise((resolve) => { failure = resolve; });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith("/input")) return { ok: true, arrayBuffer: async () => gcode,
+      headers: new Headers({ "X-FEMOS-Artifact-Digest": artifactDigest, "Content-Length": String(gcode.length) }) };
+    const body = JSON.parse(init.body);
+    if (path.endsWith("/claim")) return { ok: true, json: async () => ({ claim: claims++ === 0
+      ? { operation: "printer.simulate", executionId: "execution-print", attempt: 1,
+        leaseToken: `femos_lease_${"q".repeat(43)}`, inputDigest: digestManufacturing("printer.simulate", print), print } : null }) };
+    if (path.endsWith("/failure")) failure(body);
+    return { ok: true, json: async () => ({ cancellationRequested: false }) };
+  };
+  let client;
+  try {
+    client = await startRemoteExecutionClient({ identityPath, version: "2.5.0",
+      safePlan: (value) => value, compile: async () => { throw new Error("Unexpected compile"); },
+      simulate: async (_bytes, _snapshot, _signal, markEffect) => {
+        physicalStarts++; markEffect(); throw new Error("simulated connection lost");
+      }, simulatedPrinter: true, isPaused: () => false });
+    const body = await Promise.race([reported, new Promise((_, reject) => setTimeout(() => reject(new Error("Physical failure not reported.")), 2_000))]);
+    assert.equal(physicalStarts, 1);
+    assert.equal(body.effectStarted, true);
+    assert.match(body.diagnostics, /connection lost/);
+  } finally {
+    client?.stop(); globalThis.fetch = originalFetch;
     await rm(dir, { recursive: true, force: true });
   }
 });
