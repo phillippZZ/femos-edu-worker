@@ -40,6 +40,8 @@ test("outbound enrolled Worker claims a typed compile and reports its result", a
     await Promise.race([reported, new Promise((_, reject) => setTimeout(() => reject(new Error("Result not reported.")), 1000))]);
     assert.equal(client.enabled, true);
     assert.ok(requests.some((item) => item.path.endsWith("/heartbeat")));
+    const heartbeat = requests.find((item) => item.path.endsWith("/heartbeat"));
+    assert.deepEqual(heartbeat.body.capability[0].sourceModes, ["code", "sourceProject"]);
     assert.ok(requests.some((item) => item.path.endsWith("/claim")));
     assert.ok(requests.some((item) => item.path.endsWith("/result") && item.body.result.firmwareHex === ":00000001FF"));
     assert.ok(requests.every((item) => item.authorization === `Bearer ${credential}`));
@@ -49,6 +51,17 @@ test("outbound enrolled Worker claims a typed compile and reports its result", a
     globalThis.fetch = originalFetch;
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("sourceProject claim digests are stable across file ordering", () => {
+  const first = { targetId: "arduino-uno-r3", boardFqbn: "arduino:avr:uno", requiredLibraries: [], sourceProject: {
+    entryFile: "main.ino", files: [
+      { path: "main.ino", content: "void setup() {}" },
+      { path: "femos_blink_test.h", content: "void blinkTest();" },
+    ],
+  } };
+  const second = { ...first, sourceProject: { ...first.sourceProject, files: [...first.sourceProject.files].reverse() } };
+  assert.equal(digestPlan(first), digestPlan(second));
 });
 
 test("outbound Worker executes a real reviewed STL slice and returns printable bytes", async (t) => {

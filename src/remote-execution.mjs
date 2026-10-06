@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { platform } from "node:os";
+import { parseSourceMode, SOURCE_PROJECT_MODES } from "./compile-contract.mjs";
 
 const CAPABILITY = "arduino.compile@1";
 const ADAPTER_VERSION = "1";
@@ -25,7 +26,11 @@ async function workerRequest(base, credential, path, payload, timeoutMs = 20_000
 }
 
 export function digestPlan(plan) {
-  return createHash("sha256").update(JSON.stringify({ operation: "arduino.compile", version: 1, plan })).digest("hex");
+  const source = parseSourceMode(plan);
+  const canonicalPlan = source?.mode === "sourceProject"
+    ? { ...plan, sourceProject: source.sourceProject }
+    : plan;
+  return createHash("sha256").update(JSON.stringify({ operation: "arduino.compile", version: 1, plan: canonicalPlan })).digest("hex");
 }
 
 export function digestUpload(snapshot) {
@@ -85,7 +90,7 @@ export async function startRemoteExecutionClient({ baseUrl, identityPath, versio
         fingerprint, label: "FEMOS Simulated 3D Printer" });
     }
     const compilation = { capabilityKey: CAPABILITY, adapterVersion: ADAPTER_VERSION,
-      supportedTargets: TARGETS, healthy: !isPaused() };
+      supportedTargets: TARGETS, sourceModes: SOURCE_PROJECT_MODES, healthy: !isPaused() };
     const capabilities = [compilation];
     if (upload) capabilities.push({ capabilityKey: "arduino.upload@1", adapterVersion: "1",
       supportedTargets: TARGETS, healthy: !isPaused() });

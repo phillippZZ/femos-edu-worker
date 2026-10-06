@@ -9,12 +9,13 @@ import { homedir, platform, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { buildEspOtaArgs, buildUsbUploadArgs } from "./upload-command.mjs";
 import { startRemoteExecutionClient } from "./remote-execution.mjs";
+import { materializedSourceProjectFiles, parseRequiredLibraries, parseSourceMode, SOURCE_PROJECT_MODES } from "./compile-contract.mjs";
 import { parseDeviceObservations, publicDeviceObservations, resolveAttachedBoard } from "./device-discovery.mjs";
 import { slicerConfiguration, sliceStl, simulatePrint } from "./manufacturing.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.5.0";
+const VERSION = "2.6.0";
 const SIMULATED_PRINTER = process.env.FEMOS_SIMULATED_PRINTER === "true";
 const sliceWithConfiguredSlicer = async (bytes, signal) => {
   const config = await slicerConfiguration();
@@ -448,18 +449,13 @@ function safeFirmwareArtifact(candidate, targetId, fqbn) {
 function safeCompilePlan(body) {
   if (!body || typeof body !== "object") return null;
   const target = TARGETS.get(body.targetId);
-  if (!target || body.boardFqbn !== target.fqbn || typeof body.code !== "string" || body.code.length < 1 || body.code.length > 100_000) return null;
-  if (!Array.isArray(body.requiredLibraries) || body.requiredLibraries.length > 32) return null;
-  const requiredLibraries = [];
-  for (const item of body.requiredLibraries) {
-    const name = typeof item?.name === "string" ? item.name.trim() : "";
-    const version = item?.version == null ? null : typeof item.version === "string" ? item.version.trim() : "";
-    if (!name || name.length > 120 || !/^[A-Za-z0-9][A-Za-z0-9 ._+()/-]*$/.test(name)) return null;
-    if (version !== null && (!version || version.length > 40 || !/^[A-Za-z0-9._+-]+$/.test(version))) return null;
-    requiredLibraries.push({ name, version });
-  }
+  if (!target || body.boardFqbn !== target.fqbn) return null;
+  const source = parseSourceMode(body);
+  if (!source) return null;
+  const requiredLibraries = parseRequiredLibraries(body.requiredLibraries);
+  if (!requiredLibraries) return null;
   const scope = body.scope === "my-builds" || body.scope === "this-lan" ? body.scope : "service";
-  return { targetId: body.targetId, target, code: body.code, requiredLibraries, scope };
+  return { targetId: body.targetId, target, ...(source.mode === "code" ? { code: source.code } : { sourceProject: source.sourceProject }), requiredLibraries, scope };
 }
 
 function validCachedCompile(value, plan) {
@@ -521,11 +517,11 @@ async function withCompileSlot(operation) {
 async function compileFirmware(plan, signal) {
   await ensureCore(plan.target, signal);
   const key = createHash("sha256").update(JSON.stringify({
-    version: 3,
+    version: 4,
     cli: ARDUINO_CLI,
     targetId: plan.targetId,
     boardFqbn: plan.target.fqbn,
-    code: plan.code,
+    ...(plan.code !== undefined ? { code: plan.code } : { sourceProject: plan.sourceProject }),
     requiredLibraries: plan.requiredLibraries,
   })).digest("hex");
   const cached = compileCache.get(key);
@@ -548,7 +544,13 @@ async function compileFirmware(plan, signal) {
     try {
       await mkdir(sketchDir);
       await mkdir(outputDir);
-      await writeFile(join(sketchDir, "FemosSketch.ino"), plan.code, "utf8");
+      if (plan.code !== undefined) {
+        await writeFile(join(sketchDir, "FemosSketch.ino"), plan.code, "utf8");
+      } else {
+        for (const file of materializedSourceProjectFiles(plan.sourceProject)) {
+          await writeFile(join(sketchDir, file.path), file.content, "utf8");
+        }
+      }
       for (const library of plan.requiredLibraries) {
         const spec = library.version ? `${library.name}@${library.version}` : library.name;
         await runCommand(["lib", "install", spec], { signal, timeout: 90_000 });
@@ -633,7 +635,7 @@ const server = createServer(async (request, response) => {
         activeUpload,
         activeCompiles,
         capabilities: {
-          compilation: [...TARGETS.entries()].map(([targetId, target]) => ({ targetId, boardFqbn: target.fqbn })),
+          compilation: [...TARGETS.entries()].map(([targetId, target]) => ({ targetId, boardFqbn: target.fqbn, sourceModes: SOURCE_PROJECT_MODES })),
           upload: ["arduino-uno-q", "esp32-arduino"],
           scopes: ["my-builds", "this-lan", ...(SERVICE_COMPILER ? ["public-world"] : [])],
         },

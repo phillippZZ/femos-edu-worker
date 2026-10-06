@@ -23,6 +23,37 @@ The authoritative browser client is maintained in FEMOS at
 backward-compatible within the current major version or coordinate a client
 release before the worker release.
 
+### Compile source modes
+
+`POST /v1/compile` accepts exactly one source mode:
+
+```json
+{ "code": "void setup() {}\nvoid loop() {}" }
+```
+
+or a bounded flat source project:
+
+```json
+{
+  "sourceProject": {
+    "entryFile": "main.ino",
+    "files": [
+      { "path": "main.ino", "content": "..." },
+      { "path": "femos_module.h", "content": "..." },
+      { "path": "femos_module.cpp", "content": "..." }
+    ]
+  }
+}
+```
+
+Source projects are limited to relative, flat `.ino`, `.cpp`, and `.h` files,
+with one entry `.ino`, bounded file count/size, and no traversal, hidden,
+control, duplicate, or case-colliding paths. The entry content is materialized
+as the fixed `FemosSketch.ino`; other files are written beside it in the
+temporary sketch directory. `requiredLibraries` retains its existing bounded
+library-install contract. Worker health and durable compile heartbeat
+advertisements report `sourceModes: ["code", "sourceProject"]`.
+
 ## Outbound durable compile protocol v1
 
 After explicit one-time enrollment, the Worker reads its protected identity file
