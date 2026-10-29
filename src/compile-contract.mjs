@@ -5,6 +5,16 @@ export const MAX_SOURCE_PROJECT_TOTAL_BYTES = 8 * 1024 * 1024;
 export const MAX_SOURCE_PROJECT_PATH_LENGTH = 160;
 export const SOURCE_PROJECT_MODES = ["code", "sourceProject"];
 
+export function hasCompleteEsp32ArtifactFiles(files) {
+  if (!Array.isArray(files)) return false;
+  const names = files.map((file) => typeof file === "string" ? file : file?.name);
+  return names.includes("flash_args")
+    && names.includes("boot_app0.bin")
+    && names.some((name) => typeof name === "string" && name.endsWith(".ino.bin"))
+    && names.some((name) => typeof name === "string" && name.endsWith(".ino.bootloader.bin"))
+    && names.some((name) => typeof name === "string" && name.endsWith(".ino.partitions.bin"));
+}
+
 function normalizeSourcePath(value) {
   if (typeof value !== "string" || !value || value.length > MAX_SOURCE_PROJECT_PATH_LENGTH || value.includes("\\") || value.includes("\0")) return null;
   if (value.startsWith("/") || /^[A-Za-z]:/.test(value)) return null;

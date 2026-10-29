@@ -9,13 +9,13 @@ import { homedir, platform, tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { buildEspOtaArgs, buildUsbUploadArgs } from "./upload-command.mjs";
 import { startRemoteExecutionClient } from "./remote-execution.mjs";
-import { materializedSourceProjectFiles, parseRequiredLibraries, parseSourceMode, SOURCE_PROJECT_MODES } from "./compile-contract.mjs";
+import { hasCompleteEsp32ArtifactFiles, materializedSourceProjectFiles, parseRequiredLibraries, parseSourceMode, SOURCE_PROJECT_MODES } from "./compile-contract.mjs";
 import { parseDeviceObservations, publicDeviceObservations, resolveAttachedBoard } from "./device-discovery.mjs";
 import { slicerConfiguration, sliceStl, simulatePrint } from "./manufacturing.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.7.0";
+const VERSION = "2.7.1";
 const SIMULATED_PRINTER = process.env.FEMOS_SIMULATED_PRINTER === "true";
 const sliceWithConfiguredSlicer = async (bytes, signal) => {
   const config = await slicerConfiguration();
@@ -466,6 +466,7 @@ function validCachedCompile(value, plan) {
   if (plan.targetId === "arduino-uno-r3") return typeof value.firmwareHex === "string";
   const files = value.firmwareArtifact?.files;
   if (value.firmwareArtifact?.targetId !== plan.targetId || !Array.isArray(files)) return false;
+  if (ESP32_TARGETS.has(plan.targetId)) return hasCompleteEsp32ArtifactFiles(files);
   if (plan.targetId !== "arduino-uno-q") return true;
   return files.some((file) => file?.name?.endsWith(".ino.elf"))
     && files.some((file) => file?.name?.endsWith(".ino.elf-zsk.bin"));
@@ -520,7 +521,7 @@ async function withCompileSlot(operation) {
 async function compileFirmware(plan, signal) {
   await ensureCore(plan.target, signal);
   const key = createHash("sha256").update(JSON.stringify({
-    version: 4,
+    version: 5,
     cli: ARDUINO_CLI,
     targetId: plan.targetId,
     boardFqbn: plan.target.fqbn,
@@ -564,7 +565,7 @@ async function compileFirmware(plan, signal) {
         `${COMPILE_JOBS}`,
         "--fqbn",
         plan.target.fqbn,
-        "--output-dir",
+        ESP32_TARGETS.has(plan.targetId) ? "--build-path" : "--output-dir",
         outputDir,
         sketchDir,
       ], { signal, timeout: plan.targetId === "arduino-uno-r3" ? 90_000 : 210_000 });
@@ -584,6 +585,8 @@ async function compileFirmware(plan, signal) {
         ? names.filter((name) => name.endsWith(".ino.bin") || name.endsWith(".ino.bootloader.bin") || name.endsWith(".ino.partitions.bin") || name === "boot_app0.bin" || name === "flash_args")
         : names.filter((name) => name.endsWith(".ino.elf") || name.endsWith(".ino.elf-zsk.bin"));
       if (artifactNames.length === 0) throw new Error(`Arduino CLI did not produce firmware for ${plan.target.label}.`);
+      if (ESP32_TARGETS.has(plan.targetId) && !hasCompleteEsp32ArtifactFiles(artifactNames))
+        throw new Error(`Arduino CLI did not produce a complete reviewed flash layout for ${plan.target.label}.`);
       return {
         compiled: true,
         boardFqbn: plan.target.fqbn,

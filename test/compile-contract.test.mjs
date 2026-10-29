@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { materializedSourceProjectFiles, parseRequiredLibraries, parseSourceMode, parseSourceProject } from "../src/compile-contract.mjs";
+import { hasCompleteEsp32ArtifactFiles, materializedSourceProjectFiles, parseRequiredLibraries, parseSourceMode, parseSourceProject } from "../src/compile-contract.mjs";
+
+test("ESP32 artifact validation requires the complete reviewed flash layout", () => {
+  const files = [
+    "flash_args",
+    "boot_app0.bin",
+    "FemosSketch.ino.bin",
+    "FemosSketch.ino.bootloader.bin",
+    "FemosSketch.ino.partitions.bin",
+  ];
+  assert.equal(hasCompleteEsp32ArtifactFiles(files), true);
+  assert.equal(hasCompleteEsp32ArtifactFiles(files.filter((name) => name !== "flash_args")), false);
+  assert.equal(hasCompleteEsp32ArtifactFiles(files.filter((name) => name !== "boot_app0.bin")), false);
+  assert.equal(hasCompleteEsp32ArtifactFiles(files.map((name) => ({ name }))), true);
+});
 
 test("sourceProject validation accepts one flat entry sketch and modules", () => {
   const value = parseSourceProject({ entryFile: "main.ino", files: [
