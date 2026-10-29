@@ -15,7 +15,7 @@ import { slicerConfiguration, sliceStl, simulatePrint } from "./manufacturing.mj
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.FEMOS_UPLOADER_PORT ?? "32145", 10);
-const VERSION = "2.6.0";
+const VERSION = "2.7.0";
 const SIMULATED_PRINTER = process.env.FEMOS_SIMULATED_PRINTER === "true";
 const sliceWithConfiguredSlicer = async (bytes, signal) => {
   const config = await slicerConfiguration();
@@ -30,7 +30,10 @@ const TARGETS = new Map([
   ["arduino-uno-r3", { fqbn: "arduino:avr:uno", core: "arduino:avr", label: "Arduino Uno R3", uploadSupported: "web-serial" }],
   ["arduino-uno-q", { fqbn: "arduino:zephyr:unoq", core: "arduino:zephyr", label: "Arduino UNO Q", uploadSupported: "local-helper" }],
   ["esp32-arduino", { fqbn: "esp32:esp32:esp32", core: "esp32:esp32", indexUrl: "https://espressif.github.io/arduino-esp32/package_esp32_index.json", label: "ESP32", uploadSupported: "local-helper" }],
+  ["waveshare-esp32-s3-watch", { fqbn: "esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB", core: "esp32:esp32", indexUrl: "https://espressif.github.io/arduino-esp32/package_esp32_index.json", label: "Waveshare ESP32-S3 AMOLED Watch", uploadSupported: "local-helper" }],
 ]);
+const ESP32_TARGETS = new Set(["esp32-arduino", "waveshare-esp32-s3-watch"]);
+const boardIdFromFqbn = (fqbn) => String(fqbn).split(":").slice(0, 3).join(":");
 const ALLOWED_ORIGINS = new Set(
   (process.env.FEMOS_UPLOADER_ORIGINS ??
     "https://femos.ai,https://www.femos.ai,http://localhost:3000,http://127.0.0.1:3000")
@@ -577,7 +580,7 @@ async function compileFirmware(plan, signal) {
           requiredLibraries: plan.requiredLibraries,
         };
       }
-      const artifactNames = plan.targetId === "esp32-arduino"
+      const artifactNames = ESP32_TARGETS.has(plan.targetId)
         ? names.filter((name) => name.endsWith(".ino.bin") || name.endsWith(".ino.bootloader.bin") || name.endsWith(".ino.partitions.bin") || name === "boot_app0.bin" || name === "flash_args")
         : names.filter((name) => name.endsWith(".ino.elf") || name.endsWith(".ino.elf-zsk.bin"));
       if (artifactNames.length === 0) throw new Error(`Arduino CLI did not produce firmware for ${plan.target.label}.`);
@@ -636,7 +639,7 @@ const server = createServer(async (request, response) => {
         activeCompiles,
         capabilities: {
           compilation: [...TARGETS.entries()].map(([targetId, target]) => ({ targetId, boardFqbn: target.fqbn, sourceModes: SOURCE_PROJECT_MODES })),
-          upload: ["arduino-uno-q", "esp32-arduino"],
+          upload: ["arduino-uno-q", "esp32-arduino", "waveshare-esp32-s3-watch"],
           scopes: ["my-builds", "this-lan", ...(SERVICE_COMPILER ? ["public-world"] : [])],
         },
         settings: workerSettings,
@@ -826,7 +829,7 @@ const server = createServer(async (request, response) => {
         return;
       }
       const board = (await listBoards(controller.signal)).find(
-        (candidate) => candidate.fqbn === target.fqbn && candidate.address === port,
+        (candidate) => boardIdFromFqbn(candidate.fqbn) === boardIdFromFqbn(target.fqbn) && candidate.address === port,
       );
       if (!board) {
         sendJson(response, 409, { error: `${target.label} is not available on the selected port.` });
@@ -898,7 +901,7 @@ const server = createServer(async (request, response) => {
       ? safeFirmwareArtifact(body.firmwareArtifact, body.targetId, target.fqbn)
       : null;
     const provisioningSettings = isProvisioning ? safeProvisioningSettings(body) : null;
-    if (!target || !artifactFiles || (isProvisioning && (body.targetId !== "esp32-arduino" || !provisioningSettings))) {
+    if (!target || !artifactFiles || (isProvisioning && (!ESP32_TARGETS.has(body.targetId) || !provisioningSettings))) {
       sendJson(response, 400, { error: isProvisioning ? "Provide valid ESP32 setup firmware and wireless settings." : "Choose a supported board and provide a valid FEMOS firmware bundle." });
       return;
     }
@@ -909,13 +912,13 @@ const server = createServer(async (request, response) => {
     let uploadPort = otaPort;
     let boardName = otaPort;
     if (uploadMode === "ota") {
-      if (body.targetId !== "esp32-arduino" || !otaPort || otaPassword.length < 8 || otaPassword.length > 64) {
+      if (!ESP32_TARGETS.has(body.targetId) || !otaPort || otaPassword.length < 8 || otaPassword.length > 64) {
         sendJson(response, 400, { error: "Provide a valid ESP32 .local name or IP address and OTA password." });
         return;
       }
     } else {
       const matchingBoards = (await listBoards(controller.signal)).filter(
-        (board) => board.fqbn === target.fqbn,
+        (board) => boardIdFromFqbn(board.fqbn) === boardIdFromFqbn(target.fqbn),
       );
       const board = requestedPort
         ? matchingBoards.find((candidate) => candidate.address === requestedPort)

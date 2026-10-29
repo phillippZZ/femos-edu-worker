@@ -5,7 +5,7 @@ import { parseSourceMode, SOURCE_PROJECT_MODES } from "./compile-contract.mjs";
 
 const CAPABILITY = "arduino.compile@1";
 const ADAPTER_VERSION = "1";
-const TARGETS = ["arduino-uno-r3", "arduino-uno-q", "esp32-arduino"];
+const TARGETS = ["arduino-uno-r3", "arduino-uno-q", "esp32-arduino", "waveshare-esp32-s3-watch"];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function endpoint(base) {
