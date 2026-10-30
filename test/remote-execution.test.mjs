@@ -41,8 +41,13 @@ test("outbound enrolled Worker claims a typed compile and reports its result", a
     assert.equal(client.enabled, true);
     assert.ok(requests.some((item) => item.path.endsWith("/heartbeat")));
     const heartbeat = requests.find((item) => item.path.endsWith("/heartbeat"));
-    assert.deepEqual(heartbeat.body.capability[0].sourceModes, ["code", "sourceProject"]);
-    assert.ok(heartbeat.body.capability[0].supportedTargets.includes("waveshare-esp32-s3-watch"));
+    assert.deepEqual(heartbeat.body.capability[0], {
+      capabilityKey: "arduino.compile@1",
+      adapterVersion: "1",
+      supportedTargets: ["arduino-uno-r3", "arduino-uno-q", "esp32-arduino", "waveshare-esp32-s3-watch"],
+      sourceModes: ["code", "sourceProject"],
+      healthy: true,
+    });
     assert.ok(requests.some((item) => item.path.endsWith("/claim")));
     assert.ok(requests.some((item) => item.path.endsWith("/result") && item.body.result.firmwareHex === ":00000001FF"));
     assert.ok(requests.every((item) => item.authorization === `Bearer ${credential}`));

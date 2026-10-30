@@ -11,9 +11,37 @@ test("ESP32 artifact validation requires the complete reviewed flash layout", ()
     "FemosSketch.ino.partitions.bin",
   ];
   assert.equal(hasCompleteEsp32ArtifactFiles(files), true);
-  assert.equal(hasCompleteEsp32ArtifactFiles(files.filter((name) => name !== "flash_args")), false);
-  assert.equal(hasCompleteEsp32ArtifactFiles(files.filter((name) => name !== "boot_app0.bin")), false);
+  for (const required of files) {
+    assert.equal(
+      hasCompleteEsp32ArtifactFiles(files.filter((name) => name !== required)),
+      false,
+      `${required} must not be optional`,
+    );
+  }
   assert.equal(hasCompleteEsp32ArtifactFiles(files.map((name) => ({ name }))), true);
+});
+
+test("Waveshare compile artifacts contain every file required by flash_args", () => {
+  const firmwareArtifact = {
+    targetId: "waveshare-esp32-s3-watch",
+    boardFqbn: "esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB",
+    files: [
+      "flash_args",
+      "boot_app0.bin",
+      "FemosSketch.ino.bin",
+      "FemosSketch.ino.bootloader.bin",
+      "FemosSketch.ino.partitions.bin",
+    ].map((name) => ({ name, dataBase64: "AA==" })),
+  };
+  assert.equal(firmwareArtifact.targetId, "waveshare-esp32-s3-watch");
+  assert.equal(hasCompleteEsp32ArtifactFiles(firmwareArtifact.files), true);
+  assert.deepEqual(firmwareArtifact.files.map((file) => file.name), [
+    "flash_args",
+    "boot_app0.bin",
+    "FemosSketch.ino.bin",
+    "FemosSketch.ino.bootloader.bin",
+    "FemosSketch.ino.partitions.bin",
+  ]);
 });
 
 test("sourceProject validation accepts one flat entry sketch and modules", () => {
